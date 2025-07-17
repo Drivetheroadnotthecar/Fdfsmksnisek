@@ -1,16 +1,19 @@
+// == Full Auth & Admin Server with Account Locking and Logging ==
+
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
+const fs = require('fs');
 
 const app = express();
 const PORT = 8481;
 const DB_FILE = 'users.db';
 const DEV_PASSWORD = 'DivinedCreationInc2990!!@!!';
 const SALT_ROUNDS = 10;
+const LOG_FILE = 'logs.txt';
 
-// Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(session({
@@ -19,33 +22,34 @@ app.use(session({
   saveUninitialized: true
 }));
 
-// DB Setup
 const db = new sqlite3.Database(DB_FILE);
-db.run(`
-  CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    password TEXT NOT NULL,
-    hwid TEXT,
-    ip TEXT,
-    status TEXT DEFAULT 'active',
-    note TEXT
-  )
-`);
+db.run(`CREATE TABLE IF NOT EXISTS users (
+  username TEXT PRIMARY KEY,
+  password TEXT NOT NULL,
+  hwid TEXT,
+  ip TEXT,
+  status TEXT DEFAULT 'active',
+  note TEXT,
+  locked_hwid TEXT
+)`);
 
-// Helper
 function escape(text) {
   return (text || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[c]);
 }
 
-// Middleware for dev login
+function logEvent(text) {
+  const time = new Date().toISOString();
+  fs.appendFileSync(LOG_FILE, `[${time}] ${text}\n`);
+}
+
 function requireLogin(req, res, next) {
   if (!req.session.loggedIn) return res.redirect('/login');
   next();
 }
 
-// === Admin Routes ===
+// === Admin Pages ===
 
 app.get('/login', (req, res) => {
   res.send(`
@@ -77,26 +81,33 @@ app.get('/', requireLogin, (req, res) => {
       <input name="password" placeholder="Password" required>
       <input name="note" placeholder="Note (optional)">
       <button>Create User</button>
-    </form>
-    <br>
+    </form><br>
+
     <form method="POST" action="/ban-user">
       <input name="username" placeholder="Username to Ban" required>
       <button>Ban</button>
-    </form>
-    <br>
+    </form><br>
+
     <form method="POST" action="/unban-user">
       <input name="username" placeholder="Username to Unban" required>
       <button>Unban</button>
-    </form>
-    <br><a href="/users">View Users</a>
-    <br><a href="/logout">Logout</a>
+    </form><br>
+
+    <form method="POST" action="/delete-user">
+      <input name="username" placeholder="Username to Delete" required>
+      <button>Delete</button>
+    </form><br>
+
+    <a href="/users">View Users</a><br>
+    <a href="/notifications">Notifications</a><br>
+    <a href="/logout">Logout</a>
   `);
 });
 
 app.get('/users', requireLogin, (req, res) => {
   db.all("SELECT * FROM users", [], (err, rows) => {
     if (err) return res.status(500).send("DB Error");
-    let html = `<h2>Users</h2><table border="1"><tr><th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th></tr>`;
+    let html = `<h2>Users</h2><table border="1"><tr><th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th><th>Locked HWID</th><th>Actions</th></tr>`;
     rows.forEach(u => {
       html += `<tr>
         <td>${escape(u.username)}</td>
@@ -104,6 +115,18 @@ app.get('/users', requireLogin, (req, res) => {
         <td>${escape(u.hwid || 'N/A')}</td>
         <td>${escape(u.ip || 'N/A')}</td>
         <td>${escape(u.note || '')}</td>
+        <td>${escape(u.locked_hwid || 'None')}</td>
+        <td>
+          <form method="POST" action="/reset-password" style="display:inline">
+            <input type="hidden" name="username" value="${u.username}">
+            <input type="password" name="newpass" placeholder="New Pass" required>
+            <button>Reset</button>
+          </form>
+          <form method="POST" action="/lock-account" style="display:inline">
+            <input type="hidden" name="username" value="${u.username}">
+            <button>Lock</button>
+          </form>
+        </td>
       </tr>`;
     });
     html += `</table><br><a href="/">Back</a>`;
@@ -113,7 +136,6 @@ app.get('/users', requireLogin, (req, res) => {
 
 app.post('/create-user', requireLogin, async (req, res) => {
   const { username, password, note = '' } = req.body;
-  if (!username || !password) return res.send("Missing fields.");
   const hash = await bcrypt.hash(password, SALT_ROUNDS);
   db.run(`
     INSERT INTO users (username, password, note)
@@ -126,24 +148,55 @@ app.post('/create-user', requireLogin, async (req, res) => {
 });
 
 app.post('/ban-user', requireLogin, (req, res) => {
-  const { username } = req.body;
-  db.run("UPDATE users SET status='banned' WHERE username=?", [username], () => res.redirect('/'));
+  db.run("UPDATE users SET status='banned' WHERE username=?", [req.body.username], () => {
+    logEvent(`User ${req.body.username} was banned.`);
+    res.redirect('/');
+  });
 });
 
 app.post('/unban-user', requireLogin, (req, res) => {
-  const { username } = req.body;
-  db.run("UPDATE users SET status='active' WHERE username=?", [username], () => res.redirect('/'));
+  db.run("UPDATE users SET status='active' WHERE username=?", [req.body.username], () => res.redirect('/'));
 });
 
-// === API Routes ===
+app.post('/delete-user', requireLogin, (req, res) => {
+  db.run("DELETE FROM users WHERE username=?", [req.body.username], () => res.redirect('/'));
+});
+
+app.post('/reset-password', requireLogin, async (req, res) => {
+  const { username, newpass } = req.body;
+  const hash = await bcrypt.hash(newpass, SALT_ROUNDS);
+  db.run("UPDATE users SET password=? WHERE username=?", [hash, username], () => res.redirect('/users'));
+});
+
+app.post('/lock-account', requireLogin, (req, res) => {
+  db.get("SELECT hwid FROM users WHERE username=?", [req.body.username], (err, row) => {
+    if (row && row.hwid) {
+      db.run("UPDATE users SET locked_hwid=? WHERE username=?", [row.hwid, req.body.username], () => res.redirect('/users'));
+    } else {
+      res.send("Cannot lock, user has no HWID yet.");
+    }
+  });
+});
+
+app.get('/notifications', requireLogin, (req, res) => {
+  fs.readFile(LOG_FILE, 'utf8', (err, data) => {
+    if (err) return res.send("No logs yet.");
+    res.send(`<h2>Notifications</h2><pre>${escape(data)}</pre><br><a href="/">Back</a>`);
+  });
+});
+
+// === API ===
 
 app.post('/register', async (req, res) => {
   const { username, password, hwid } = req.body;
   const ip = req.ip;
-  if (!username || !password) return res.status(400).json({ status: "error", message: "Username and password required." });
+  if (!username || !password) return res.status(400).json({ status: "error", message: "Missing fields." });
 
-  db.get("SELECT status FROM users WHERE username=?", [username], async (err, row) => {
-    if (row && row.status === "banned") return res.status(403).json({ status: "error", message: "You are banned." });
+  db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
+    if (row && row.status === 'banned') {
+      logEvent(`Banned user ${username} attempted to register.`);
+      return res.status(403).json({ status: "error", message: "You are banned." });
+    }
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     db.run(`
       INSERT INTO users (username, password, hwid, ip)
@@ -159,20 +212,29 @@ app.post('/register', async (req, res) => {
 app.post('/login-user', (req, res) => {
   const { username, password, hwid } = req.body;
   const ip = req.ip;
-  if (!username || !password) return res.status(400).json({ status: "error", message: "Missing fields." });
+  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
 
   db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
     if (!row) return res.status(403).json({ status: "error", message: "Invalid credentials." });
-    if (row.status === 'banned') return res.status(403).json({ status: "error", message: "Banned." });
+    if (row.status === 'banned') {
+      logEvent(`Banned user ${username} tried logging in.`);
+      return res.status(403).json({ status: "error", message: "Banned." });
+    }
     const valid = await bcrypt.compare(password, row.password);
     if (!valid) return res.status(403).json({ status: "error", message: "Invalid credentials." });
-    if (row.hwid && row.hwid !== hwid) return res.status(403).json({ status: "error", message: "HWID mismatch." });
-    db.run("UPDATE users SET ip=? WHERE username=?", [ip, username]);
+    if (row.locked_hwid && row.locked_hwid !== hwid) {
+      db.run("UPDATE users SET status='banned' WHERE username=?", [username]);
+      logEvent(`User ${username} was banned for sharing their credentials.`);
+      return res.status(403).json({ status: "error", message: "HWID mismatch. You are now banned." });
+    }
+    if (!row.locked_hwid) {
+      db.run("UPDATE users SET locked_hwid=? WHERE username=?", [hwid, username]);
+      logEvent(`User ${username} HWID locked to ${hwid}`);
+    }
+    db.run("UPDATE users SET ip=?, hwid=? WHERE username=?", [ip, hwid, username]);
+    logEvent(`User ${username} logged in.`);
     res.json({ status: "success", message: "Login successful." });
   });
 });
 
-// === Start Server ===
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`✅ Server running at http://0.0.0.0:${PORT}`));
