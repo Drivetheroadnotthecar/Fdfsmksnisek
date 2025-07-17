@@ -1,240 +1,103 @@
-// == Full Auth & Admin Server with Account Locking and Logging ==
+// FULL AUTH SERVER with locked_hwid support and SQLite auto-migration
 
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const bodyParser = require('body-parser');
+const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
 const bcrypt = require('bcrypt');
+const path = require('path');
 const fs = require('fs');
 
 const app = express();
 const PORT = 8481;
 const DB_FILE = 'users.db';
-const DEV_PASSWORD = 'DivinedCreationInc2990!!@!!';
-const SALT_ROUNDS = 10;
-const LOG_FILE = 'logs.txt';
 
+// Setup middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(session({
-  secret: 'super_secret_key',
-  resave: false,
-  saveUninitialized: true
+    secret: 'super_secret_key',
+    resave: false,
+    saveUninitialized: true
 }));
 
+// Init DB
 const db = new sqlite3.Database(DB_FILE);
-db.run(`CREATE TABLE IF NOT EXISTS users (
-  username TEXT PRIMARY KEY,
-  password TEXT NOT NULL,
-  hwid TEXT,
-  ip TEXT,
-  status TEXT DEFAULT 'active',
-  note TEXT,
-  locked_hwid TEXT
-)`);
-
-function escape(text) {
-  return (text || '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[c]);
-}
-
-function logEvent(text) {
-  const time = new Date().toISOString();
-  fs.appendFileSync(LOG_FILE, `[${time}] ${text}\n`);
-}
-
-function requireLogin(req, res, next) {
-  if (!req.session.loggedIn) return res.redirect('/login');
-  next();
-}
-
-// === Admin Pages ===
-
-app.get('/login', (req, res) => {
-  res.send(`
-    <h2>Dev Login</h2>
-    <form method="POST">
-      <input name="password" type="password" placeholder="Dev Password" required>
-      <button type="submit">Login</button>
-    </form>
-  `);
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password TEXT,
+        hwid TEXT,
+        ip TEXT,
+        banned INTEGER DEFAULT 0,
+        notes TEXT,
+        locked_hwid TEXT
+    )`);
 });
 
-app.post('/login', (req, res) => {
-  if (req.body.password === DEV_PASSWORD) {
-    req.session.loggedIn = true;
-    return res.redirect('/');
-  }
-  res.send('<p>Wrong password.</p><a href="/login">Try again</a>');
-});
-
-app.get('/logout', (req, res) => {
-  req.session.destroy(() => res.redirect('/login'));
-});
-
-app.get('/', requireLogin, (req, res) => {
-  res.send(`
-    <h2>Admin Panel</h2>
-    <form method="POST" action="/create-user">
-      <input name="username" placeholder="Username" required>
-      <input name="password" placeholder="Password" required>
-      <input name="note" placeholder="Note (optional)">
-      <button>Create User</button>
-    </form><br>
-
-    <form method="POST" action="/ban-user">
-      <input name="username" placeholder="Username to Ban" required>
-      <button>Ban</button>
-    </form><br>
-
-    <form method="POST" action="/unban-user">
-      <input name="username" placeholder="Username to Unban" required>
-      <button>Unban</button>
-    </form><br>
-
-    <form method="POST" action="/delete-user">
-      <input name="username" placeholder="Username to Delete" required>
-      <button>Delete</button>
-    </form><br>
-
-    <a href="/users">View Users</a><br>
-    <a href="/notifications">Notifications</a><br>
-    <a href="/logout">Logout</a>
-  `);
-});
-
-app.get('/users', requireLogin, (req, res) => {
-  db.all("SELECT * FROM users", [], (err, rows) => {
-    if (err) return res.status(500).send("DB Error");
-    let html = `<h2>Users</h2><table border="1"><tr><th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th><th>Locked HWID</th><th>Actions</th></tr>`;
-    rows.forEach(u => {
-      html += `<tr>
-        <td>${escape(u.username)}</td>
-        <td>${escape(u.status)}</td>
-        <td>${escape(u.hwid || 'N/A')}</td>
-        <td>${escape(u.ip || 'N/A')}</td>
-        <td>${escape(u.note || '')}</td>
-        <td>${escape(u.locked_hwid || 'None')}</td>
-        <td>
-          <form method="POST" action="/reset-password" style="display:inline">
-            <input type="hidden" name="username" value="${u.username}">
-            <input type="password" name="newpass" placeholder="New Pass" required>
-            <button>Reset</button>
-          </form>
-          <form method="POST" action="/lock-account" style="display:inline">
-            <input type="hidden" name="username" value="${u.username}">
-            <button>Lock</button>
-          </form>
-        </td>
-      </tr>`;
+// Auto-migration to add missing column
+function ensureColumnExists(columnName, columnType) {
+    db.all("PRAGMA table_info(users)", [], (err, columns) => {
+        if (err) return console.error(err);
+        const exists = columns.some(col => col.name === columnName);
+        if (!exists) {
+            db.run(`ALTER TABLE users ADD COLUMN ${columnName} ${columnType}`);
+            console.log(`✅ Added column: ${columnName}`);
+        }
     });
-    html += `</table><br><a href="/">Back</a>`;
-    res.send(html);
-  });
-});
+}
 
-app.post('/create-user', requireLogin, async (req, res) => {
-  const { username, password, note = '' } = req.body;
-  const hash = await bcrypt.hash(password, SALT_ROUNDS);
-  db.run(`
-    INSERT INTO users (username, password, note)
-    VALUES (?, ?, ?)
-    ON CONFLICT(username) DO UPDATE SET password=excluded.password, note=excluded.note
-  `, [username, hash, note], err => {
-    if (err) return res.send("DB error.");
-    res.redirect('/');
-  });
-});
+ensureColumnExists('locked_hwid', 'TEXT');
 
-app.post('/ban-user', requireLogin, (req, res) => {
-  db.run("UPDATE users SET status='banned' WHERE username=?", [req.body.username], () => {
-    logEvent(`User ${req.body.username} was banned.`);
-    res.redirect('/');
-  });
-});
-
-app.post('/unban-user', requireLogin, (req, res) => {
-  db.run("UPDATE users SET status='active' WHERE username=?", [req.body.username], () => res.redirect('/'));
-});
-
-app.post('/delete-user', requireLogin, (req, res) => {
-  db.run("DELETE FROM users WHERE username=?", [req.body.username], () => res.redirect('/'));
-});
-
-app.post('/reset-password', requireLogin, async (req, res) => {
-  const { username, newpass } = req.body;
-  const hash = await bcrypt.hash(newpass, SALT_ROUNDS);
-  db.run("UPDATE users SET password=? WHERE username=?", [hash, username], () => res.redirect('/users'));
-});
-
-app.post('/lock-account', requireLogin, (req, res) => {
-  db.get("SELECT hwid FROM users WHERE username=?", [req.body.username], (err, row) => {
-    if (row && row.hwid) {
-      db.run("UPDATE users SET locked_hwid=? WHERE username=?", [row.hwid, req.body.username], () => res.redirect('/users'));
-    } else {
-      res.send("Cannot lock, user has no HWID yet.");
-    }
-  });
-});
-
-app.get('/notifications', requireLogin, (req, res) => {
-  fs.readFile(LOG_FILE, 'utf8', (err, data) => {
-    if (err) return res.send("No logs yet.");
-    res.send(`<h2>Notifications</h2><pre>${escape(data)}</pre><br><a href="/">Back</a>`);
-  });
-});
-
-// === API ===
-
+// API routes
 app.post('/register', async (req, res) => {
-  const { username, password, hwid } = req.body;
-  const ip = req.ip;
-  if (!username || !password) return res.status(400).json({ status: "error", message: "Missing fields." });
+    const { username, password, hwid } = req.body;
+    if (!username || !password || !hwid) return res.json({ status: 'error', message: 'Missing fields.' });
 
-  db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
-    if (row && row.status === 'banned') {
-      logEvent(`Banned user ${username} attempted to register.`);
-      return res.status(403).json({ status: "error", message: "You are banned." });
-    }
-    const hash = await bcrypt.hash(password, SALT_ROUNDS);
-    db.run(`
-      INSERT INTO users (username, password, hwid, ip)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(username) DO UPDATE SET password=excluded.password, hwid=excluded.hwid, ip=excluded.ip
-    `, [username, hash, hwid, ip], err2 => {
-      if (err2) return res.status(500).json({ status: "error", message: "Database error." });
-      res.json({ status: "success", message: "Registered." });
+    const hash = await bcrypt.hash(password, 10);
+    const ip = req.ip;
+
+    db.run("INSERT INTO users (username, password, hwid, ip, locked_hwid) VALUES (?, ?, ?, ?, ?)",
+        [username, hash, hwid, ip, hwid],
+        err => {
+            if (err) return res.json({ status: 'error', message: 'Username taken or database error.' });
+            res.json({ status: 'success', message: 'User registered.' });
+        });
+});
+
+app.post('/login-user', async (req, res) => {
+    const { username, password, hwid } = req.body;
+    if (!username || !password || !hwid) return res.json({ status: 'error', message: 'Missing fields.' });
+
+    db.get("SELECT * FROM users WHERE username = ?", [username], async (err, user) => {
+        if (err || !user) return res.json({ status: 'error', message: 'User not found.' });
+        if (user.banned) return res.json({ status: 'error', message: 'You are banned.' });
+
+        const valid = await bcrypt.compare(password, user.password);
+        if (!valid) return res.json({ status: 'error', message: 'Invalid password.' });
+
+        if (user.locked_hwid && user.locked_hwid !== hwid) {
+            return res.json({ status: 'error', message: 'HWID mismatch. You may be banned.' });
+        }
+
+        db.run("UPDATE users SET hwid = ?, ip = ?, locked_hwid = ? WHERE username = ?",
+            [hwid, req.ip, hwid, username]);
+
+        res.json({ status: 'success', message: 'Login successful.' });
     });
-  });
 });
 
-app.post('/login-user', (req, res) => {
-  const { username, password, hwid } = req.body;
-  const ip = req.ip;
-  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
+app.post('/ban-user', (req, res) => {
+    const { username, reason } = req.body;
+    if (!username) return res.json({ status: 'error', message: 'Missing username.' });
 
-  db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
-    if (!row) return res.status(403).json({ status: "error", message: "Invalid credentials." });
-    if (row.status === 'banned') {
-      logEvent(`Banned user ${username} tried logging in.`);
-      return res.status(403).json({ status: "error", message: "Banned." });
-    }
-    const valid = await bcrypt.compare(password, row.password);
-    if (!valid) return res.status(403).json({ status: "error", message: "Invalid credentials." });
-    if (row.locked_hwid && row.locked_hwid !== hwid) {
-      db.run("UPDATE users SET status='banned' WHERE username=?", [username]);
-      logEvent(`User ${username} was banned for sharing their credentials.`);
-      return res.status(403).json({ status: "error", message: "HWID mismatch. You are now banned." });
-    }
-    if (!row.locked_hwid) {
-      db.run("UPDATE users SET locked_hwid=? WHERE username=?", [hwid, username]);
-      logEvent(`User ${username} HWID locked to ${hwid}`);
-    }
-    db.run("UPDATE users SET ip=?, hwid=? WHERE username=?", [ip, hwid, username]);
-    logEvent(`User ${username} logged in.`);
-    res.json({ status: "success", message: "Login successful." });
-  });
+    db.run("UPDATE users SET banned = 1, notes = ? WHERE username = ?", [reason || 'Manual ban', username], err => {
+        if (err) return res.json({ status: 'error', message: 'Failed to ban.' });
+        res.json({ status: 'success', message: 'User banned.' });
+    });
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`✅ Server running at http://0.0.0.0:${PORT}`));
+app.listen(PORT, () => {
+    console.log(`✅ Server running on http://localhost:${PORT}`);
+});
