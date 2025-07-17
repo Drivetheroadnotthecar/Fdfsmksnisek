@@ -12,6 +12,7 @@ const DEV_PASSWORD = 'DivinedCreationInc2990!!@!!';
 const SALT_ROUNDS = 10;
 const LOG_FILE = 'logs.txt';
 
+// Middleware setup
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(session({
@@ -20,6 +21,7 @@ app.use(session({
   saveUninitialized: true
 }));
 
+// Initialize DB and create users table if not exists
 const db = new sqlite3.Database(DB_FILE);
 db.serialize(() => {
   db.run(`
@@ -33,23 +35,39 @@ db.serialize(() => {
       locked_hwid TEXT
     )
   `);
+
+  // Auto-migrate: add locked_hwid column if missing
+  db.all("PRAGMA table_info(users)", [], (err, columns) => {
+    if (err) return console.error(err);
+    const hasLockedHwid = columns.some(col => col.name === "locked_hwid");
+    if (!hasLockedHwid) {
+      db.run("ALTER TABLE users ADD COLUMN locked_hwid TEXT", () => {
+        console.log("✅ Added 'locked_hwid' column");
+      });
+    }
+  });
 });
 
+// Helper to escape HTML
 function escape(text) {
   return (text || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[c]);
 }
 
+// Logging helper
 function logEvent(text) {
   const timestamp = new Date().toISOString();
   fs.appendFileSync(LOG_FILE, `[${timestamp}] ${text}\n`);
 }
 
+// Middleware to protect admin routes
 function requireLogin(req, res, next) {
   if (!req.session.loggedIn) return res.redirect('/login');
   next();
 }
+
+// === Admin Routes ===
 
 app.get('/login', (req, res) => {
   res.send(`
@@ -194,6 +212,8 @@ app.get('/notifications', requireLogin, (req, res) => {
   });
 });
 
+// === API ===
+
 app.post('/register', async (req, res) => {
   const { username, password, hwid } = req.body;
   const ip = req.ip;
@@ -238,12 +258,16 @@ app.post('/login-user', (req, res) => {
     const valid = await bcrypt.compare(password, row.password);
     if (!valid) return res.status(403).json({ status: "error", message: "Invalid credentials." });
 
+    // Check locked HWID
     if (row.locked_hwid && row.locked_hwid !== hwid) {
       db.run("UPDATE users SET status='banned' WHERE username=?", [username]);
       logEvent(`User ${username} banned for sharing credentials (HWID mismatch).`);
-      return res.status(403).json({ status: "error", message: "HWID mismatch. You are now banned." });
+      // Return JSON error explicitly:
+      res.setHeader("Content-Type", "application/json");
+      return res.status(403).json({ status: "error", message: "[SECURITY] Account already locked to a different HWID. You gave your credentials away. Auto-banning." });
     }
 
+    // Lock account if not locked
     if (!row.locked_hwid) {
       db.run("UPDATE users SET locked_hwid=? WHERE username=?", [hwid, username]);
       logEvent(`User ${username} HWID locked to ${hwid}`);
@@ -254,6 +278,18 @@ app.post('/login-user', (req, res) => {
 
     res.json({ status: "success", message: "Login successful." });
   });
+});
+
+// Fallback route: JSON errors for API, HTML login for others
+app.use((req, res) => {
+  if (req.path.startsWith("/login-user") || req.path.startsWith("/register")) {
+    return res.status(404).json({ status: "error", message: "API route not found." });
+  }
+  res.send(`<h2>Dev Login</h2>
+    <form method="POST">
+      <input name="password" type="password" placeholder="Dev Password" required>
+      <button type="submit">Login</button>
+    </form>`);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
