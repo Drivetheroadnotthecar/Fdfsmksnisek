@@ -4,7 +4,6 @@ const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const PORT = 8481;
@@ -13,7 +12,7 @@ const DEV_PASSWORD = 'DivinedCreationInc2990!!@!!';
 const SALT_ROUNDS = 10;
 const LOG_FILE = 'logs.txt';
 
-// Middleware
+// Middleware setup
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(session({
@@ -22,7 +21,7 @@ app.use(session({
   saveUninitialized: true
 }));
 
-// DB Init
+// Initialize DB and create users table if not exists
 const db = new sqlite3.Database(DB_FILE);
 db.serialize(() => {
   db.run(`
@@ -33,41 +32,45 @@ db.serialize(() => {
       ip TEXT,
       status TEXT DEFAULT 'active',
       note TEXT,
-      locked_hwid TEXT,
-      ban_reason TEXT
+      locked_hwid TEXT
     )
   `);
 
+  // Auto-migrate: add locked_hwid column if missing
   db.all("PRAGMA table_info(users)", [], (err, columns) => {
     if (err) return console.error(err);
-    if (!columns.some(col => col.name === "locked_hwid")) {
-      db.run("ALTER TABLE users ADD COLUMN locked_hwid TEXT");
-    }
-    if (!columns.some(col => col.name === "ban_reason")) {
-      db.run("ALTER TABLE users ADD COLUMN ban_reason TEXT");
+    const hasLockedHwid = columns.some(col => col.name === "locked_hwid");
+    if (!hasLockedHwid) {
+      db.run("ALTER TABLE users ADD COLUMN locked_hwid TEXT", () => {
+        console.log("✅ Added 'locked_hwid' column");
+      });
     }
   });
 });
 
-// Helpers
+// Helper to escape HTML
 function escape(text) {
   return (text || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[c]);
 }
 
+// Logging helper
 function logEvent(text) {
   const timestamp = new Date().toISOString();
   fs.appendFileSync(LOG_FILE, `[${timestamp}] ${text}\n`);
 }
 
+// Middleware to protect admin routes
 function requireLogin(req, res, next) {
   if (!req.session.loggedIn) return res.redirect('/login');
   next();
 }
 
-function renderPage(title, content) {
-  return `<!DOCTYPE html>
+// Helper to render full HTML page with styling & theme + common scripts for search & notification sounds
+function renderPage(title, content, extraScripts = '') {
+  return `
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -99,49 +102,47 @@ function renderPage(title, content) {
   }
   form {
     margin: 1em auto;
-    max-width: 850px;
+    max-width: 600px;
     background: #1a0000;
-    padding: 15px 25px;
-    border-radius: 15px;
+    padding: 15px 20px;
+    border-radius: 12px;
     border: 3px solid #ff1a1a;
-    box-shadow: 0 0 12px #ff0000cc;
+    box-shadow: 0 0 10px #ff0000cc;
     position: relative;
   }
-  form button, button {
+  form button {
     background-color: #ff1a1a;
     border: none;
     color: #000;
     font-weight: bold;
-    padding: 10px 18px;
+    padding: 8px 14px;
     margin-left: 10px;
-    border-radius: 12px;
+    border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.3s ease;
   }
-  form button:hover, button:hover {
+  form button:hover {
     background-color: #ff4c4c;
   }
   input, select {
     font-family: 'Courier New', monospace;
     font-size: 16px;
-    padding: 10px;
-    border-radius: 12px;
+    padding: 8px;
+    border-radius: 8px;
     border: 2px solid #ff1a1a;
-    width: 250px;
-    margin-right: 10px;
+    width: 180px;
+    margin-right: 5px;
     background-color: #330000;
     color: #ff9999;
   }
-  input.search {
-    width: 400px;
-  }
   table {
     border-collapse: collapse;
+    max-width: 100%;
     width: 100%;
   }
   th, td {
     border: 2px solid #ff1a1a;
-    padding: 10px 14px;
+    padding: 8px 12px;
     text-align: center;
     word-break: break-word;
   }
@@ -158,20 +159,20 @@ function renderPage(title, content) {
     overflow-y: auto;
     border: 3px solid #ff1a1a;
     padding: 15px;
-    border-radius: 15px;
-    max-width: 95vw;
+    border-radius: 12px;
+    max-width: 90vw;
     margin: 1em auto;
     font-family: 'Courier New', monospace;
   }
   .vine-container {
     position: relative;
-    padding: 35px 40px;
+    padding: 25px 30px;
     border: 5px solid #ff1a1a;
-    border-radius: 25px;
-    max-width: 1100px;
-    margin: 1.5em auto 2.5em auto;
+    border-radius: 20px;
+    max-width: 1000px;
+    margin: 1em auto 2em auto;
     box-shadow: 0 0 20px #ff0000cc;
-    background-color: rgba(26,0,0,0.9);
+    background-color: rgba(26,0,0,0.85);
   }
   .vine-container::before, .vine-container::after {
     content: "";
@@ -180,10 +181,10 @@ function renderPage(title, content) {
     pointer-events: none;
   }
   .vine-container::before {
-    top: -30px;
-    left: -30px;
-    width: 90px;
-    height: 90px;
+    top: -25px;
+    left: -25px;
+    width: 80px;
+    height: 80px;
     border-top: 3px solid #ff1a1a;
     border-left: 3px solid #ff1a1a;
     border-radius: 50% 0 0 0;
@@ -194,10 +195,10 @@ function renderPage(title, content) {
     transform: rotate(-15deg);
   }
   .vine-container::after {
-    bottom: -30px;
-    right: -30px;
-    width: 90px;
-    height: 90px;
+    bottom: -25px;
+    right: -25px;
+    width: 80px;
+    height: 80px;
     border-bottom: 3px solid #ff1a1a;
     border-right: 3px solid #ff1a1a;
     border-radius: 0 0 50% 0;
@@ -207,55 +208,54 @@ function renderPage(title, content) {
       -30px -30px 0 #ff1a1a;
     transform: rotate(15deg);
   }
+
+  /* Container for users table with fixed height and vertical scroll */
   .users-table-container {
-    max-height: 65vh;
+    max-height: 70vh;
     overflow-y: auto;
-    margin-top: 1em;
+    margin: 1em 0;
   }
+
+  /* Horizontal scroll wrapper for tables */
   .table-wrapper {
     overflow-x: auto;
   }
-  /* Autocomplete dropdown */
-  .autocomplete-items {
-    position: absolute;
-    border: 1px solid #ff1a1a;
-    border-bottom: none;
-    border-top: none;
-    z-index: 99;
-    top: 48px;
-    left: 0;
-    right: 0;
-    background-color: #1a0000;
-    max-height: 180px;
-    overflow-y: auto;
-    border-radius: 0 0 10px 10px;
+
+  /* Search bar styling */
+  #searchInput {
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    padding: 10px;
+    border-radius: 10px;
+    border: 2px solid #ff1a1a;
+    width: 300px;
+    margin: 10px auto;
+    display: block;
+    background-color: #330000;
+    color: #ff9999;
+    text-align: center;
   }
-  .autocomplete-items div {
-    padding: 8px 10px;
-    cursor: pointer;
-    color: #ff4c4c;
-  }
-  .autocomplete-items div:hover {
-    background-color: #ff1a1a;
-    color: #000;
-  }
-  /* Responsive */
-  @media (max-width: 900px) {
-    form, .vine-container {
-      max-width: 95vw;
-      padding: 20px;
+
+  /* Responsive adjustments */
+  @media (max-width: 700px) {
+    form, pre, .vine-container {
+      width: 95vw;
+      margin: 1em auto;
     }
-    input, input.search {
+    input {
       width: 100%;
-      margin-bottom: 10px;
+      margin: 5px 0;
     }
-    form button, button {
+    form button {
+      margin: 10px 0 0 0;
       width: 100%;
-      margin: 8px 0 0 0;
     }
     td, th {
       font-size: 14px;
-      padding: 8px;
+      padding: 5px;
+    }
+    #searchInput {
+      width: 90%;
     }
   }
 </style>
@@ -264,81 +264,15 @@ function renderPage(title, content) {
   <div class="vine-container">
   ${content}
   </div>
-<script>
-  function autocomplete(inp, arr) {
-    let currentFocus;
-    inp.addEventListener("input", function() {
-      const val = this.value;
-      closeAllLists();
-      if (!val) { return false;}
-      currentFocus = -1;
-      const list = document.createElement("DIV");
-      list.setAttribute("id", this.id + "autocomplete-list");
-      list.setAttribute("class", "autocomplete-items");
-      this.parentNode.appendChild(list);
-      for (let i = 0; i < arr.length; i++) {
-        if (arr[i].substr(0, val.length).toUpperCase() === val.toUpperCase()) {
-          const item = document.createElement("DIV");
-          item.innerHTML = "<strong>" + arr[i].substr(0, val.length) + "</strong>";
-          item.innerHTML += arr[i].substr(val.length);
-          item.innerHTML += "<input type='hidden' value='" + arr[i] + "'>";
-          item.addEventListener("click", function() {
-            inp.value = this.getElementsByTagName("input")[0].value;
-            closeAllLists();
-            document.getElementById('searchForm').submit();
-          });
-          list.appendChild(item);
-        }
-      }
-    });
-    inp.addEventListener("keydown", function(e) {
-      let list = document.getElementById(this.id + "autocomplete-list");
-      if (list) list = list.getElementsByTagName("div");
-      if (e.keyCode === 40) {
-        currentFocus++;
-        addActive(list);
-      } else if (e.keyCode === 38) {
-        currentFocus--;
-        addActive(list);
-      } else if (e.keyCode === 13) {
-        e.preventDefault();
-        if (currentFocus > -1) {
-          if (list) list[currentFocus].click();
-        }
-      }
-    });
-    function addActive(list) {
-      if (!list) return false;
-      removeActive(list);
-      if (currentFocus >= list.length) currentFocus = 0;
-      if (currentFocus < 0) currentFocus = (list.length - 1);
-      list[currentFocus].classList.add("autocomplete-active");
-    }
-    function removeActive(list) {
-      for (let i = 0; i < list.length; i++) {
-        list[i].classList.remove("autocomplete-active");
-      }
-    }
-    function closeAllLists(elmnt) {
-      const items = document.getElementsByClassName("autocomplete-items");
-      for (let i = 0; i < items.length; i++) {
-        if (elmnt !== items[i] && elmnt !== inp) {
-          items[i].parentNode.removeChild(items[i]);
-        }
-      }
-    }
-    document.addEventListener("click", function (e) {
-      closeAllLists(e.target);
-    });
-  }
-</script>
+
+  ${extraScripts}
 </body>
-</html>`;
+</html>
+`;
 }
 
 // === Admin Routes ===
 
-// Login page
 app.get('/login', (req, res) => {
   res.send(renderPage("Dev Login", `
     <h2>Dev Login</h2>
@@ -348,6 +282,7 @@ app.get('/login', (req, res) => {
     </form>
   `));
 });
+
 app.post('/login', (req, res) => {
   if (req.body.password === DEV_PASSWORD) {
     req.session.loggedIn = true;
@@ -357,61 +292,53 @@ app.post('/login', (req, res) => {
   }
 });
 
-// Logout
 app.get('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/login'));
 });
 
-// Home page with create user form, banned users link, and search bar with autocomplete
+// Main Admin Panel with links to functions
 app.get('/', requireLogin, (req, res) => {
-  db.all("SELECT username FROM users", [], (err, rows) => {
-    if (err) rows = [];
-    const usernames = rows.map(r => r.username);
-    res.send(renderPage("Admin Panel", `
-      <h2>Admin Panel</h2>
+  res.send(renderPage("Admin Panel", `
+    <h2>Admin Panel</h2>
+    <form method="POST" action="/create-user">
+      <input name="username" placeholder="Username" required>
+      <input name="password" placeholder="Password" required>
+      <input name="note" placeholder="Note (optional)">
+      <button>Create User</button>
+    </form><br>
 
-      <form method="POST" action="/create-user" style="margin-bottom: 2em;">
-        <input name="username" placeholder="Username" required>
-        <input name="password" placeholder="Password" required>
-        <button>Create / Update User</button>
-      </form>
+    <form method="POST" action="/ban-user">
+      <input name="username" placeholder="Username to Ban" required>
+      <button>Ban</button>
+    </form><br>
 
-      <form id="searchForm" method="GET" action="/search-user" autocomplete="off" style="position: relative; margin-bottom: 2em;">
-        <input id="searchInput" class="search" type="text" name="username" placeholder="Search Username..." required>
-        <button type="submit">Search User</button>
-      </form>
+    <form method="POST" action="/unban-user">
+      <input name="username" placeholder="Username to Unban" required>
+      <button>Unban</button>
+    </form><br>
 
-      <button onclick="window.location.href='/banned-users'" style="margin-bottom: 1.5em;">View Banned Users</button>
-      <button onclick="window.location.href='/users'">View All Users</button>
+    <form method="POST" action="/delete-user">
+      <input name="username" placeholder="Username to Delete" required>
+      <button>Delete</button>
+    </form><br>
 
-      <script>autocomplete(document.getElementById('searchInput'), ${JSON.stringify(usernames)});</script>
-    `));
-  });
+    <a href="/users">View Users</a><br>
+    <a href="/notifications">Notifications</a><br>
+    <a href="/logout">Logout</a>
+  `));
 });
 
-// Create or update user
-app.post('/create-user', requireLogin, async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.send("Missing fields.");
-  const hash = await bcrypt.hash(password, SALT_ROUNDS);
-  db.run(`
-    INSERT INTO users (username, password)
-    VALUES (?, ?)
-    ON CONFLICT(username) DO UPDATE SET password=excluded.password
-  `, [username, hash], err => {
-    if (err) return res.send("DB error.");
-    res.redirect('/');
-  });
-});
-
-// Users page: list all users with action button to view details
+// Users page with smart search bar and styled table
 app.get('/users', requireLogin, (req, res) => {
-  db.all("SELECT username, status, hwid, ip, note, locked_hwid FROM users ORDER BY username COLLATE NOCASE ASC", [], (err, rows) => {
+  db.all("SELECT * FROM users", [], (err, rows) => {
     if (err) return res.status(500).send("DB Error");
+
     let html = `
       <h2>Users</h2>
+      <input type="text" id="searchInput" placeholder="Search users by username, status, note..." autocomplete="off" />
+
       <div class="users-table-container table-wrapper">
-      <table border="1">
+      <table border="1" id="usersTable">
         <thead>
           <tr>
             <th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th><th>Locked HWID</th><th>Actions</th>
@@ -427,196 +354,223 @@ app.get('/users', requireLogin, (req, res) => {
         <td>${escape(u.note || '')}</td>
         <td>${escape(u.locked_hwid || 'None')}</td>
         <td>
-          <button onclick="window.location.href='/user-detail?search=${encodeURIComponent(u.username)}'">Details</button>
-        </td>
-      </tr>`;
-    });
-    html += `</tbody></table></div><br><button onclick="window.location.href='/'">Back to Home</button>`;
-    res.send(renderPage("Users List", html));
-  });
-});
-
-// User detail page: Search by username/HWID/IP & actions (lock/unlock/ban/unban/reset password)
-app.get('/user-detail', requireLogin, (req, res) => {
-  const search = (req.query.search || '').trim();
-  if (!search) {
-    return res.send(renderPage("User Detail Search", `
-      <h2>Search User by Username, HWID or IP</h2>
-      <form method="GET">
-        <input name="search" placeholder="Enter username, HWID, or IP" required>
-        <button>Search</button>
-      </form>
-      <br><button onclick="window.location.href='/users'">Back to Users</button>
-    `));
-  }
-  // Search user by username OR hwid OR ip
-  db.get(`SELECT * FROM users WHERE username = ? OR hwid = ? OR ip = ? COLLATE NOCASE`, [search, search, search], (err, user) => {
-    if (err) return res.send(renderPage("Error", "DB Error."));
-    if (!user) {
-      return res.send(renderPage("User Not Found", `
-        <h2>No user found for "${escape(search)}"</h2>
-        <button onclick="window.location.href='/user-detail'">Search Again</button>
-        <button onclick="window.location.href='/users'">Back to Users</button>
-      `));
-    }
-
-    // Render user info & actions
-    res.send(renderPage(`User Detail - ${escape(user.username)}`, `
-      <h2>User Detail: ${escape(user.username)}</h2>
-      <pre>
-Username: ${escape(user.username)}
-Status: ${escape(user.status)}
-HWID: ${escape(user.hwid || 'N/A')}
-IP: ${escape(user.ip || 'N/A')}
-Note: ${escape(user.note || '')}
-Locked HWID: ${escape(user.locked_hwid || 'None')}
-Ban Reason: ${escape(user.ban_reason || 'None')}
-Password Hash: ${escape(user.password)}
-      </pre>
-
-      <form method="POST" action="/user-action" style="margin-top: 1em;">
-        <input type="hidden" name="username" value="${escape(user.username)}">
-        
-        <label>
-          Lock HWID to:
-          <input name="lock_hwid" placeholder="Enter HWID to lock" value="${escape(user.locked_hwid || '')}">
-          <button type="submit" name="action" value="lock-hwid">Lock HWID</button>
-        </label>
-      </form>
-      <form method="POST" action="/user-action" style="margin-top: 1em;">
-        <input type="hidden" name="username" value="${escape(user.username)}">
-        <button type="submit" name="action" value="unlock-hwid">Unlock HWID</button>
-      </form>
-      <form method="POST" action="/user-action" style="margin-top: 1em;">
-        <input type="hidden" name="username" value="${escape(user.username)}">
-        <label>
-          Ban Reason (leave blank to clear):
-          <input name="ban_reason" placeholder="Reason for ban" value="${escape(user.ban_reason || '')}">
-          <button type="submit" name="action" value="ban">Ban User</button>
-        </label>
-      </form>
-      <form method="POST" action="/user-action" style="margin-top: 1em;">
-        <input type="hidden" name="username" value="${escape(user.username)}">
-        <button type="submit" name="action" value="unban">Unban User</button>
-      </form>
-      <form method="POST" action="/user-action" style="margin-top: 1em;">
-        <input type="hidden" name="username" value="${escape(user.username)}">
-        <label>
-          Reset Password:
-          <input name="new_password" placeholder="New password">
-          <button type="submit" name="action" value="reset-password">Reset Password</button>
-        </label>
-      </form>
-
-      <br><button onclick="window.location.href='/users'">Back to Users</button>
-      <button onclick="window.location.href='/'">Back to Home</button>
-    `));
-  });
-});
-
-// User action handler
-app.post('/user-action', requireLogin, async (req, res) => {
-  const { username, action, lock_hwid, ban_reason, new_password } = req.body;
-  if (!username || !action) return res.send("Missing fields.");
-
-  db.get("SELECT * FROM users WHERE username = ?", [username], async (err, user) => {
-    if (err || !user) return res.send("User not found.");
-
-    switch(action) {
-      case 'lock-hwid':
-        if (!lock_hwid) return res.send("Missing HWID to lock.");
-        db.run("UPDATE users SET locked_hwid = ? WHERE username = ?", [lock_hwid.trim(), username], (e) => {
-          if (e) return res.send("DB error locking HWID.");
-          logEvent(`HWID locked for user ${username} to ${lock_hwid.trim()}`);
-          res.redirect(`/user-detail?search=${encodeURIComponent(username)}`);
-        });
-        break;
-      case 'unlock-hwid':
-        db.run("UPDATE users SET locked_hwid = NULL WHERE username = ?", [username], (e) => {
-          if (e) return res.send("DB error unlocking HWID.");
-          logEvent(`HWID unlocked for user ${username}`);
-          res.redirect(`/user-detail?search=${encodeURIComponent(username)}`);
-        });
-        break;
-      case 'ban':
-        db.run("UPDATE users SET status = 'banned', ban_reason = ? WHERE username = ?", [ban_reason ? ban_reason.trim() : 'No reason given', username], (e) => {
-          if (e) return res.send("DB error banning user.");
-          logEvent(`User banned: ${username} Reason: ${ban_reason || 'No reason given'}`);
-          res.redirect(`/user-detail?search=${encodeURIComponent(username)}`);
-        });
-        break;
-      case 'unban':
-        db.run("UPDATE users SET status = 'active', ban_reason = NULL WHERE username = ?", [username], (e) => {
-          if (e) return res.send("DB error unbanning user.");
-          logEvent(`User unbanned: ${username}`);
-          res.redirect(`/user-detail?search=${encodeURIComponent(username)}`);
-        });
-        break;
-      case 'reset-password':
-        if (!new_password) return res.send("Missing new password.");
-        const hash = await bcrypt.hash(new_password, SALT_ROUNDS);
-        db.run("UPDATE users SET password = ? WHERE username = ?", [hash, username], (e) => {
-          if (e) return res.send("DB error resetting password.");
-          logEvent(`Password reset for user ${username}`);
-          res.redirect(`/user-detail?search=${encodeURIComponent(username)}`);
-        });
-        break;
-      default:
-        res.send("Unknown action.");
-    }
-  });
-});
-
-// Banned users page: list banned users with unban buttons
-app.get('/banned-users', requireLogin, (req, res) => {
-  db.all("SELECT username, ban_reason FROM users WHERE status = 'banned' ORDER BY username COLLATE NOCASE ASC", [], (err, rows) => {
-    if (err) return res.send("DB error.");
-    let html = `
-      <h2>Banned Users</h2>
-      <div class="users-table-container table-wrapper">
-      <table border="1">
-        <thead><tr><th>Username</th><th>Ban Reason</th><th>Actions</th></tr></thead><tbody>
-    `;
-    rows.forEach(u => {
-      html += `<tr>
-        <td>${escape(u.username)}</td>
-        <td>${escape(u.ban_reason || '')}</td>
-        <td>
-          <form method="POST" action="/user-action" style="margin:0;">
-            <input type="hidden" name="username" value="${escape(u.username)}">
-            <button type="submit" name="action" value="unban">Unban</button>
+          <form method="POST" action="/reset-password" style="display:inline">
+            <input type="hidden" name="username" value="${u.username}">
+            <input type="password" name="newpass" placeholder="New Pass" required>
+            <button>Reset Password</button>
+          </form>
+          <form method="POST" action="/lock-account" style="display:inline">
+            <input type="hidden" name="username" value="${u.username}">
+            <button>Lock Account</button>
           </form>
         </td>
       </tr>`;
     });
-    html += `</tbody></table></div><br><button onclick="window.location.href='/'">Back to Home</button>`;
-    res.send(renderPage("Banned Users", html));
+    html += `</tbody></table></div><br><a href="/">Back</a>`;
+
+    // Add JS script for search filter
+    const script = `
+<script>
+  const searchInput = document.getElementById('searchInput');
+  const table = document.getElementById('usersTable').getElementsByTagName('tbody')[0];
+
+  searchInput.addEventListener('input', () => {
+    const filter = searchInput.value.toLowerCase();
+    for (let row of table.rows) {
+      const text = row.innerText.toLowerCase();
+      row.style.display = text.includes(filter) ? '' : 'none';
+    }
+  });
+</script>
+`;
+
+    res.send(renderPage("Users", html, script));
   });
 });
 
-// Logs page: show logs with clear button
-app.get('/logs', requireLogin, (req, res) => {
-  let logs = "";
-  try {
-    logs = fs.readFileSync(LOG_FILE, 'utf8');
-  } catch {
-    logs = "No logs found.";
-  }
-  res.send(renderPage("Logs", `
-    <h2>Logs</h2>
-    <pre>${escape(logs)}</pre>
-    <form method="POST" action="/clear-logs" style="text-align:center;">
-      <button type="submit">Clear Logs</button>
-    </form>
-    <button onclick="window.location.href='/'" style="margin-top: 1em;">Back to Home</button>
-  `));
+// Admin actions (create, ban, unban, delete, reset pass, lock account)
+app.post('/create-user', requireLogin, async (req, res) => {
+  const { username, password, note = '' } = req.body;
+  if (!username || !password) return res.send("Missing fields.");
+  const hash = await bcrypt.hash(password, SALT_ROUNDS);
+  db.run(`
+    INSERT INTO users (username, password, note)
+    VALUES (?, ?, ?)
+    ON CONFLICT(username) DO UPDATE SET password=excluded.password, note=excluded.note
+  `, [username, hash, note], err => {
+    if (err) return res.send("DB error.");
+    res.redirect('/');
+  });
 });
+
+app.post('/ban-user', requireLogin, (req, res) => {
+  const { username } = req.body;
+  db.run("UPDATE users SET status='banned' WHERE username=?", [username], err => {
+    if (!err) logEvent(`User ${username} was banned.`);
+    res.redirect('/');
+  });
+});
+
+app.post('/unban-user', requireLogin, (req, res) => {
+  const { username } = req.body;
+  db.run("UPDATE users SET status='active' WHERE username=?", [username], err => res.redirect('/'));
+});
+
+app.post('/delete-user', requireLogin, (req, res) => {
+  const { username } = req.body;
+  db.run("DELETE FROM users WHERE username=?", [username], err => res.redirect('/'));
+});
+
+app.post('/reset-password', requireLogin, async (req, res) => {
+  const { username, newpass } = req.body;
+  if (!newpass) return res.send("Missing new password.");
+  const hash = await bcrypt.hash(newpass, SALT_ROUNDS);
+  db.run("UPDATE users SET password=? WHERE username=?", [hash, username], err => res.redirect('/users'));
+});
+
+app.post('/lock-account', requireLogin, (req, res) => {
+  const { username } = req.body;
+  db.get("SELECT hwid FROM users WHERE username=?", [username], (err, row) => {
+    if (err || !row || !row.hwid) return res.send("Cannot lock account: No HWID found.");
+    db.run("UPDATE users SET locked_hwid=? WHERE username=?", [row.hwid, username], err2 => {
+      if (!err2) logEvent(`Account ${username} locked to HWID ${row.hwid}`);
+      res.redirect('/users');
+    });
+  });
+});
+
+// Notifications page with polling and notification sound
+app.get('/notifications', requireLogin, (req, res) => {
+  fs.readFile(LOG_FILE, 'utf8', (err, data) => {
+    const logContent = err ? "No logs yet." : escape(data);
+
+    const html = `
+      <h2>Notifications Log</h2>
+      <pre id="logContent">${logContent}</pre>
+      <form method="POST" action="/clear-logs" style="text-align:center; margin-top: 1em;">
+        <button type="submit" onclick="return confirm('Are you sure you want to clear all logs?');">Clear Logs</button>
+      </form>
+      <br><a href="/">Back</a>
+
+      <audio id="notifSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
+    `;
+
+    // JS polls logs.txt every 10 seconds and plays sound if new logs detected
+    const script = `
+<script>
+  const logEl = document.getElementById('logContent');
+  const notifSound = document.getElementById('notifSound');
+  let lastLogLength = logEl.innerText.length;
+
+  async function pollLogs() {
+    try {
+      const res = await fetch('/logs-data');
+      if (!res.ok) throw new Error('Fetch failed');
+      const text = await res.text();
+      if (text.length > lastLogLength) {
+        notifSound.play();
+        logEl.innerText = text;
+        lastLogLength = text.length;
+      }
+    } catch (e) {
+      console.error('Error fetching logs:', e);
+    }
+  }
+  setInterval(pollLogs, 10000);
+</script>
+`;
+    res.send(renderPage("Notifications", html, script));
+  });
+});
+
 app.post('/clear-logs', requireLogin, (req, res) => {
-  fs.writeFileSync(LOG_FILE, '');
-  res.redirect('/logs');
+  fs.writeFile(LOG_FILE, '', err => {
+    if (!err) logEvent('Logs cleared by admin.');
+    res.redirect('/notifications');
+  });
+});
+
+// Endpoint to serve logs data for polling
+app.get('/logs-data', requireLogin, (req, res) => {
+  fs.readFile(LOG_FILE, 'utf8', (err, data) => {
+    if (err) return res.send('');
+    res.set('Content-Type', 'text/plain');
+    res.send(data);
+  });
+});
+
+// === API ===
+
+// Register API
+app.post('/register', async (req, res) => {
+  const { username, password, hwid } = req.body;
+  const ip = req.ip;
+  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
+
+  // Check if either the username or the hwid is banned (to prevent bypass)
+  db.get("SELECT * FROM users WHERE username=? OR locked_hwid=?", [username, hwid], async (err, row) => {
+    if (row && row.status === 'banned') {
+      logEvent(`Banned user or HWID attempted registration: ${username}, HWID: ${hwid}`);
+      return res.status(403).json({ status: "error", message: "Banned." });
+    }
+    if (row && row.locked_hwid && row.locked_hwid !== hwid) {
+      logEvent(`HWID mismatch registration attempt for locked account: ${username}`);
+      return res.status(403).json({ status: "error", message: "HWID locked." });
+    }
+
+    const hash = await bcrypt.hash(password, SALT_ROUNDS);
+    db.run(`
+      INSERT INTO users (username, password, hwid, ip, status)
+      VALUES (?, ?, ?, ?, 'active')
+      ON CONFLICT(username) DO UPDATE SET password=excluded.password, hwid=excluded.hwid, ip=excluded.ip
+    `, [username, hash, hwid, ip], err2 => {
+      if (err2) return res.status(500).json({ status: "error", message: "DB error." });
+      logEvent(`User registered: ${username} (HWID: ${hwid}, IP: ${ip})`);
+      res.json({ status: "ok", message: "Registered." });
+    });
+  });
+});
+
+// Login API
+app.post('/login-user', (req, res) => {
+  const { username, password, hwid } = req.body;
+  const ip = req.ip;
+  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
+
+  db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
+    if (!row) return res.status(401).json({ status: "error", message: "Invalid credentials." });
+    if (row.status === 'banned') {
+      logEvent(`Banned user login attempt: ${username}`);
+      return res.status(403).json({ status: "error", message: "Banned." });
+    }
+    if (row.locked_hwid && row.locked_hwid !== hwid) {
+      logEvent(`HWID mismatch login attempt: ${username}`);
+      return res.status(403).json({ status: "error", message: "HWID locked." });
+    }
+
+    const valid = await bcrypt.compare(password, row.password);
+    if (!valid) return res.status(401).json({ status: "error", message: "Invalid credentials." });
+
+    // Track HWIDs: allow max 2 HWIDs per user, ban if exceeded
+    const existingHwids = row.hwid ? row.hwid.split(',') : [];
+    if (!existingHwids.includes(hwid)) {
+      existingHwids.push(hwid);
+      if (existingHwids.length > 2) {
+        db.run("UPDATE users SET status='banned' WHERE username=?", [username], () => {
+          logEvent(`User ${username} banned for HWID abuse.`);
+        });
+        return res.status(403).json({ status: "error", message: "HWID abuse detected, banned." });
+      }
+      db.run("UPDATE users SET hwid=? WHERE username=?", [existingHwids.join(','), username]);
+    }
+
+    db.run("UPDATE users SET ip=? WHERE username=?", [ip, username]);
+    logEvent(`User logged in: ${username} (HWID: ${hwid}, IP: ${ip})`);
+    res.json({ status: "ok", message: "Logged in." });
+  });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Admin panel running on http://localhost:${PORT}`);
+  console.log(`✅ Server running at http://localhost:${PORT}`);
 });
