@@ -21,6 +21,7 @@ app.use(session({
   saveUninitialized: true
 }));
 
+// Initialize DB and create users table if not exists
 const db = new sqlite3.Database(DB_FILE);
 db.serialize(() => {
   db.run(`
@@ -35,20 +36,11 @@ db.serialize(() => {
     )
   `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS banned (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT,
-      hwid TEXT,
-      ip TEXT,
-      reason TEXT,
-      banned_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
+  // Auto-migrate: add locked_hwid column if missing
   db.all("PRAGMA table_info(users)", [], (err, columns) => {
     if (err) return console.error(err);
-    if (!columns.some(c => c.name === 'locked_hwid')) {
+    const hasLockedHwid = columns.some(col => col.name === "locked_hwid");
+    if (!hasLockedHwid) {
       db.run("ALTER TABLE users ADD COLUMN locked_hwid TEXT", () => {
         console.log("✅ Added 'locked_hwid' column");
       });
@@ -56,46 +48,26 @@ db.serialize(() => {
   });
 });
 
+// Helper to escape HTML
 function escape(text) {
   return (text || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[c]);
 }
 
+// Logging helper
 function logEvent(text) {
   const timestamp = new Date().toISOString();
   fs.appendFileSync(LOG_FILE, `[${timestamp}] ${text}\n`);
 }
 
+// Middleware to protect admin routes
 function requireLogin(req, res, next) {
   if (!req.session.loggedIn) return res.redirect('/login');
   next();
 }
 
-function banUser(username, hwid, ip, reason = "Auto-ban: credential sharing") {
-  db.run("UPDATE users SET status='banned' WHERE username=?", [username]);
-  db.run("INSERT INTO banned (username, hwid, ip, reason) VALUES (?, ?, ?, ?)", [username, hwid, ip, reason]);
-  logEvent(`User ${username} banned. Reason: ${reason}`);
-}
-
-function checkBanned(req, res, next) {
-  const { username, hwid } = req.body;
-  const ip = req.ip;
-
-  db.get(
-    `SELECT * FROM banned WHERE username = ? OR hwid = ? OR ip = ?`,
-    [username, hwid, ip],
-    (err, ban) => {
-      if (err) return res.status(500).json({ status: "error", message: "Server error." });
-      if (ban) {
-        return res.status(403).json({ status: "error", message: `You are banned: ${ban.reason}` });
-      }
-      next();
-    }
-  );
-}
-
-// === Helper to wrap admin pages with styling and vine decoration ===
+// Helper to render full HTML page with styling & theme
 function renderPage(title, content) {
   return `
 <!DOCTYPE html>
@@ -111,6 +83,12 @@ function renderPage(title, content) {
     color: #ff1a1a;
     font-family: 'UnifrakturCook', cursive, monospace;
     margin: 0; padding: 0;
+
+    /* Red skull background as subtle pattern */
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgdmlld0JveD0iMCAwIDEyMCAxMjAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CiAgICA8cGF0aCBkPSJNNjAgMTRjMjQuNCAwIDQ0IDE5LjYgNDQgNDQgMCAxNC4zLTcuNiAyNi44LTE5LjQgMzQuMyAxLjIgMy4xIDQuNCAxNS41IDQuNCAxNS41cy0xMi42LTEuNi0yMy4gMS43Yy0xMC40IDMuMi0xMi43IDguNi0xMi43IDguNmwtLjQtNy40Yy0uNi03LjcgMTQuOS02IDE0LjktNiAxMi0xIDE4LjUtNyAxOC41LTcgMCAxNi01IDE4LTE3IDAtMTAgNi0xNiAxMi0xNiA2LjMgMCAxMy42IDIuMSAxOC40IDUuMyAyLjUtMy4zIDQuNC03LjcgNC40LTEyLjYgMC0xMC0xMy0xOC0zMC0xOC0xNi41IDAtMzAgOC03IDhsLTExLTloLjN6IiBmaWxsPSIjZjAwMDAwIiBmaWx0ZXI9InVybCgjcmVkX3NoYWRvdykiLz4KICAgIDxmaWx0ZXIgaWQ9InJlZF9zaGFkb3ciPgogICAgICA8ZmVUdXJidWxlbmNlIGJhc2VGcmVxdWVuY3lJbj0iZnJvbmQiIG51bU9jdGF2ZXM9IjEiIG51bUN5Y2xlcz0iMiIgdHVyYnVsZW5jZVRlcm1zPSIwLjYiLz4KICAgIDwvZmlsdGVyPgo8L3N2Zz4=");
+    background-repeat: repeat;
+    background-position: center;
+    background-size: 120px 120px;
   }
   a {
     color: #ff4c4c;
@@ -160,15 +138,15 @@ function renderPage(title, content) {
     color: #ff9999;
   }
   table {
-    margin: 1em auto;
     border-collapse: collapse;
-    max-width: 90vw;
+    max-width: 100%;
     width: 100%;
   }
   th, td {
     border: 2px solid #ff1a1a;
     padding: 8px 12px;
     text-align: center;
+    word-break: break-word;
   }
   th {
     background-color: #330000;
@@ -188,8 +166,6 @@ function renderPage(title, content) {
     margin: 1em auto;
     font-family: 'Courier New', monospace;
   }
-
-  /* Red vine border decoration around container */
   .vine-container {
     position: relative;
     padding: 25px 30px;
@@ -198,6 +174,7 @@ function renderPage(title, content) {
     max-width: 1000px;
     margin: 1em auto 2em auto;
     box-shadow: 0 0 20px #ff0000cc;
+    background-color: rgba(26,0,0,0.85);
   }
   .vine-container::before, .vine-container::after {
     content: "";
@@ -205,7 +182,6 @@ function renderPage(title, content) {
     border: 3px solid transparent;
     pointer-events: none;
   }
-  /* vine top-left */
   .vine-container::before {
     top: -25px;
     left: -25px;
@@ -220,7 +196,6 @@ function renderPage(title, content) {
       30px 30px 0 #ff1a1a;
     transform: rotate(-15deg);
   }
-  /* vine bottom-right */
   .vine-container::after {
     bottom: -25px;
     right: -25px;
@@ -236,9 +211,21 @@ function renderPage(title, content) {
     transform: rotate(15deg);
   }
 
-  /* Responsive */
+  /* Container for users table with fixed height and vertical scroll */
+  .users-table-container {
+    max-height: 70vh;
+    overflow-y: auto;
+    margin: 1em 0;
+  }
+
+  /* Horizontal scroll wrapper for tables */
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  /* Responsive adjustments */
   @media (max-width: 700px) {
-    form, table, pre {
+    form, pre, .vine-container {
       width: 95vw;
       margin: 1em auto;
     }
@@ -266,7 +253,7 @@ function renderPage(title, content) {
 `;
 }
 
-// --- Admin Routes ---
+// === Admin Routes ===
 
 app.get('/login', (req, res) => {
   res.send(renderPage("Dev Login", `
@@ -283,9 +270,7 @@ app.post('/login', (req, res) => {
     req.session.loggedIn = true;
     res.redirect('/');
   } else {
-    res.send(renderPage("Login Failed", `
-      <p>Wrong password.</p><a href="/login">Try again</a>
-    `));
+    res.send(renderPage("Dev Login", '<p>Wrong password.</p><a href="/login">Try again</a>'));
   }
 });
 
@@ -327,9 +312,17 @@ app.get('/', requireLogin, (req, res) => {
 app.get('/users', requireLogin, (req, res) => {
   db.all("SELECT * FROM users", [], (err, rows) => {
     if (err) return res.status(500).send("DB Error");
-    let html = `<h2>Users</h2><table border="1"><tr>
-      <th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th><th>Locked HWID</th><th>Actions</th>
-    </tr>`;
+
+    let html = `
+      <h2>Users</h2>
+      <div class="users-table-container table-wrapper">
+      <table border="1">
+        <thead>
+          <tr>
+            <th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th><th>Locked HWID</th><th>Actions</th>
+          </tr>
+        </thead><tbody>
+    `;
     rows.forEach(u => {
       html += `<tr>
         <td>${escape(u.username)}</td>
@@ -351,7 +344,7 @@ app.get('/users', requireLogin, (req, res) => {
         </td>
       </tr>`;
     });
-    html += `</table><br><a href="/">Back</a>`;
+    html += `</tbody></table></div><br><a href="/">Back</a>`;
     res.send(renderPage("Users", html));
   });
 });
@@ -372,22 +365,15 @@ app.post('/create-user', requireLogin, async (req, res) => {
 
 app.post('/ban-user', requireLogin, (req, res) => {
   const { username } = req.body;
-  db.get("SELECT hwid, ip FROM users WHERE username=?", [username], (err, row) => {
-    if (err || !row) return res.redirect('/');
-    banUser(username, row.hwid, row.ip);
+  db.run("UPDATE users SET status='banned' WHERE username=?", [username], err => {
+    if (!err) logEvent(`User ${username} was banned.`);
     res.redirect('/');
   });
 });
 
 app.post('/unban-user', requireLogin, (req, res) => {
   const { username } = req.body;
-  db.run("UPDATE users SET status='active' WHERE username=?", [username], err => {
-    if (!err) {
-      db.run("DELETE FROM banned WHERE username=?", [username]);
-      logEvent(`User ${username} unbanned.`);
-    }
-    res.redirect('/');
-  });
+  db.run("UPDATE users SET status='active' WHERE username=?", [username], err => res.redirect('/'));
 });
 
 app.post('/delete-user', requireLogin, (req, res) => {
@@ -413,16 +399,17 @@ app.post('/lock-account', requireLogin, (req, res) => {
   });
 });
 
+// Notifications page with Clear Logs button
 app.get('/notifications', requireLogin, (req, res) => {
   fs.readFile(LOG_FILE, 'utf8', (err, data) => {
-    if (err) data = "No logs yet.";
+    const logContent = err ? "No logs yet." : escape(data);
     const html = `
       <h2>Notifications Log</h2>
-      <pre>${escape(data)}</pre>
-      <form method="POST" action="/clear-logs" onsubmit="return confirm('Clear all logs? This cannot be undone.')">
-        <button type="submit" style="background:#ff1a1a; color:#000; font-weight:bold; padding:10px 20px; border:none; border-radius:8px; cursor:pointer;">Clear Logs</button>
-      </form><br>
-      <a href="/">Back</a>
+      <pre>${logContent}</pre>
+      <form method="POST" action="/clear-logs" style="text-align:center; margin-top: 1em;">
+        <button type="submit" onclick="return confirm('Are you sure you want to clear all logs?');">Clear Logs</button>
+      </form>
+      <br><a href="/">Back</a>
     `;
     res.send(renderPage("Notifications", html));
   });
@@ -430,94 +417,83 @@ app.get('/notifications', requireLogin, (req, res) => {
 
 app.post('/clear-logs', requireLogin, (req, res) => {
   fs.writeFile(LOG_FILE, '', err => {
-    if (err) {
-      logEvent("Failed to clear logs: " + err.message);
-    } else {
-      logEvent("Logs cleared by admin.");
-    }
+    if (!err) logEvent('Logs cleared by admin.');
     res.redirect('/notifications');
   });
 });
 
-// --- API ---
+// === API ===
 
-app.post('/register', checkBanned, async (req, res) => {
+// Register API
+app.post('/register', async (req, res) => {
+  const { username, password, hwid } = req.body;
+  const ip = req.ip;
+  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
+
+  // Check if either the username or the hwid is banned (to prevent bypass)
+  db.get("SELECT * FROM users WHERE username=? OR locked_hwid=?", [username, hwid], async (err, row) => {
+    if (row && row.status === 'banned') {
+      logEvent(`Banned user or HWID attempted registration: ${username}, HWID: ${hwid}`);
+      return res.status(403).json({ status: "error", message: "Banned." });
+    }
+    if (row && row.locked_hwid && row.locked_hwid !== hwid) {
+      logEvent(`HWID mismatch registration attempt for locked account: ${username}`);
+      return res.status(403).json({ status: "error", message: "HWID locked." });
+    }
+
+    const hash = await bcrypt.hash(password, SALT_ROUNDS);
+    db.run(`
+      INSERT INTO users (username, password, hwid, ip, status)
+      VALUES (?, ?, ?, ?, 'active')
+      ON CONFLICT(username) DO UPDATE SET password=excluded.password, hwid=excluded.hwid, ip=excluded.ip
+    `, [username, hash, hwid, ip], err2 => {
+      if (err2) return res.status(500).json({ status: "error", message: "DB error." });
+      logEvent(`User registered: ${username} (HWID: ${hwid}, IP: ${ip})`);
+      res.json({ status: "ok", message: "Registered." });
+    });
+  });
+});
+
+// Login API
+app.post('/login-user', (req, res) => {
   const { username, password, hwid } = req.body;
   const ip = req.ip;
   if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
 
   db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
-    if (row && row.status === 'banned') {
-      logEvent(`Banned user ${username} attempted to register.`);
-      return res.status(403).json({ status: "error", message: "You are banned." });
-    }
-    const hash = await bcrypt.hash(password, SALT_ROUNDS);
-    const insertOrUpdate = row
-      ? `UPDATE users SET password=?, hwid=?, ip=? WHERE username=?`
-      : `INSERT INTO users (username, password, hwid, ip) VALUES (?, ?, ?, ?)`;
-
-    if (row) {
-      db.run(insertOrUpdate, [hash, hwid, ip, username], err2 => {
-        if (err2) return res.status(500).json({ status: "error", message: "Database error." });
-        res.json({ status: "success", message: "Registered (updated)." });
-      });
-    } else {
-      db.run(insertOrUpdate, [username, hash, hwid, ip], err2 => {
-        if (err2) return res.status(500).json({ status: "error", message: "Database error." });
-        res.json({ status: "success", message: "Registered." });
-      });
-    }
-  });
-});
-
-app.post('/login-user', checkBanned, (req, res) => {
-  const { username, password, hwid } = req.body;
-  const ip = req.ip;
-  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
-
-  db.get("SELECT * FROM users WHERE username=?", [username], async (err, user) => {
-    if (err) return res.status(500).json({ status: "error", message: "Database error." });
-    if (!user) return res.status(403).json({ status: "error", message: "Invalid credentials." });
-    if (user.status === 'banned') {
-      logEvent(`Banned user ${username} tried logging in.`);
+    if (!row) return res.status(401).json({ status: "error", message: "Invalid credentials." });
+    if (row.status === 'banned') {
+      logEvent(`Banned user login attempt: ${username}`);
       return res.status(403).json({ status: "error", message: "Banned." });
     }
-
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(403).json({ status: "error", message: "Invalid credentials." });
-
-    if (user.locked_hwid && user.locked_hwid !== hwid) {
-      banUser(user.username, user.locked_hwid, ip, "Credential sharing detected");
-      db.get("SELECT username FROM users WHERE locked_hwid = ?", [hwid], (err2, otherUser) => {
-        if (otherUser && otherUser.username !== user.username) {
-          banUser(otherUser.username, hwid, ip, "Credential sharing detected (second user)");
-        }
-      });
-      return res.status(403).json({
-        status: "error",
-        message: "[SECURITY] Account locked to a different HWID. You gave your credentials away. Auto-banning both accounts."
-      });
+    if (row.locked_hwid && row.locked_hwid !== hwid) {
+      logEvent(`HWID mismatch login attempt: ${username}`);
+      return res.status(403).json({ status: "error", message: "HWID locked." });
     }
 
-    if (!user.locked_hwid) {
-      db.run("UPDATE users SET locked_hwid=? WHERE username=?", [hwid, username]);
-      logEvent(`User ${username} locked to HWID ${hwid}`);
+    const valid = await bcrypt.compare(password, row.password);
+    if (!valid) return res.status(401).json({ status: "error", message: "Invalid credentials." });
+
+    // Track HWIDs: allow max 2 HWIDs per user, ban if exceeded
+    const existingHwids = row.hwid ? row.hwid.split(',') : [];
+    if (!existingHwids.includes(hwid)) {
+      existingHwids.push(hwid);
+      if (existingHwids.length > 2) {
+        db.run("UPDATE users SET status='banned' WHERE username=?", [username], () => {
+          logEvent(`User ${username} banned for HWID abuse.`);
+        });
+        return res.status(403).json({ status: "error", message: "HWID abuse detected, banned." });
+      }
+      db.run("UPDATE users SET hwid=? WHERE username=?", [existingHwids.join(','), username]);
     }
 
-    db.run("UPDATE users SET ip=?, hwid=? WHERE username=?", [ip, hwid, username]);
-    logEvent(`User ${username} logged in from IP ${ip}`);
-
-    res.json({ status: "success", message: "Login successful." });
+    db.run("UPDATE users SET ip=? WHERE username=?", [ip, username]);
+    logEvent(`User logged in: ${username} (HWID: ${hwid}, IP: ${ip})`);
+    res.json({ status: "ok", message: "Logged in." });
   });
 });
 
-app.use((req, res) => {
-  if (req.path.startsWith("/login-user") || req.path.startsWith("/register")) {
-    return res.status(404).json({ status: "error", message: "API route not found." });
-  }
-  res.redirect('/login');
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
+// Start server
+app.listen(PORT, () => {
+  console.log(`✅ Server running at http://localhost:${PORT}`);
 });
