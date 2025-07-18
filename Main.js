@@ -12,7 +12,7 @@ const DEV_PASSWORD = 'DivinedCreationInc2990!!@!!';
 const SALT_ROUNDS = 10;
 const LOG_FILE = 'logs.txt';
 
-// Middleware setup
+// Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(session({
@@ -21,7 +21,7 @@ app.use(session({
   saveUninitialized: true
 }));
 
-// Initialize DB and create users table if not exists
+// DB Init + migrate locked_hwid column
 const db = new sqlite3.Database(DB_FILE);
 db.serialize(() => {
   db.run(`
@@ -36,11 +36,9 @@ db.serialize(() => {
     )
   `);
 
-  // Auto-migrate: add locked_hwid column if missing
-  db.all("PRAGMA table_info(users)", [], (err, columns) => {
+  db.all("PRAGMA table_info(users)", [], (err, cols) => {
     if (err) return console.error(err);
-    const hasLockedHwid = columns.some(col => col.name === "locked_hwid");
-    if (!hasLockedHwid) {
+    if (!cols.find(c => c.name === 'locked_hwid')) {
       db.run("ALTER TABLE users ADD COLUMN locked_hwid TEXT", () => {
         console.log("✅ Added 'locked_hwid' column");
       });
@@ -48,34 +46,31 @@ db.serialize(() => {
   });
 });
 
-// Helper to escape HTML
-function escape(text) {
+// Utilities
+
+function escapeHtml(text) {
   return (text || '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[c]);
 }
 
-// Logging helper
 function logEvent(text) {
-  const timestamp = new Date().toISOString();
-  fs.appendFileSync(LOG_FILE, `[${timestamp}] ${text}\n`);
+  const time = new Date().toISOString();
+  fs.appendFileSync(LOG_FILE, `[${time}] ${text}\n`);
 }
 
-// Middleware to protect admin routes
 function requireLogin(req, res, next) {
   if (!req.session.loggedIn) return res.redirect('/login');
   next();
 }
 
-// Helper to render full HTML page with styling & theme + common scripts for search & notification sounds
 function renderPage(title, content, extraScripts = '') {
-  return `
-<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escape(title)}</title>
+<title>${escapeHtml(title)}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=UnifrakturCook:wght@700&display=swap');
   body {
@@ -88,18 +83,9 @@ function renderPage(title, content, extraScripts = '') {
     background-position: center;
     background-size: 120px 120px;
   }
-  a {
-    color: #ff4c4c;
-    text-decoration: none;
-  }
-  a:hover {
-    text-decoration: underline;
-  }
-  h2 {
-    text-align: center;
-    margin-top: 1em;
-    text-shadow: 0 0 5px #ff1a1a;
-  }
+  a { color: #ff4c4c; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h2 { text-align: center; margin-top: 1em; text-shadow: 0 0 5px #ff1a1a; }
   form {
     margin: 1em auto;
     max-width: 600px;
@@ -208,20 +194,14 @@ function renderPage(title, content, extraScripts = '') {
       -30px -30px 0 #ff1a1a;
     transform: rotate(15deg);
   }
-
-  /* Container for users table with fixed height and vertical scroll */
   .users-table-container {
     max-height: 70vh;
     overflow-y: auto;
     margin: 1em 0;
   }
-
-  /* Horizontal scroll wrapper for tables */
   .table-wrapper {
     overflow-x: auto;
   }
-
-  /* Search bar styling */
   #searchInput {
     font-family: 'Courier New', monospace;
     font-size: 18px;
@@ -235,8 +215,6 @@ function renderPage(title, content, extraScripts = '') {
     color: #ff9999;
     text-align: center;
   }
-
-  /* Responsive adjustments */
   @media (max-width: 700px) {
     form, pre, .vine-container {
       width: 95vw;
@@ -264,20 +242,19 @@ function renderPage(title, content, extraScripts = '') {
   <div class="vine-container">
   ${content}
   </div>
-
   ${extraScripts}
 </body>
-</html>
-`;
+</html>`;
 }
 
 // === Admin Routes ===
 
+// Login Page
 app.get('/login', (req, res) => {
   res.send(renderPage("Dev Login", `
     <h2>Dev Login</h2>
-    <form method="POST">
-      <input name="password" type="password" placeholder="Dev Password" required>
+    <form method="POST" action="/login">
+      <input name="password" type="password" placeholder="Dev Password" required />
       <button type="submit">Login</button>
     </form>
   `));
@@ -288,7 +265,10 @@ app.post('/login', (req, res) => {
     req.session.loggedIn = true;
     res.redirect('/');
   } else {
-    res.send(renderPage("Dev Login", '<p>Wrong password.</p><a href="/login">Try again</a>'));
+    res.send(renderPage("Dev Login", `
+      <p style="color:#f00;text-align:center;">Wrong password.</p>
+      <a href="/login">Try again</a>
+    `));
   }
 });
 
@@ -296,29 +276,29 @@ app.get('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/login'));
 });
 
-// Main Admin Panel with links to functions
+// Admin panel home
 app.get('/', requireLogin, (req, res) => {
   res.send(renderPage("Admin Panel", `
     <h2>Admin Panel</h2>
     <form method="POST" action="/create-user">
-      <input name="username" placeholder="Username" required>
-      <input name="password" placeholder="Password" required>
-      <input name="note" placeholder="Note (optional)">
+      <input name="username" placeholder="Username" required />
+      <input name="password" placeholder="Password" required />
+      <input name="note" placeholder="Note (optional)" />
       <button>Create User</button>
     </form><br>
 
     <form method="POST" action="/ban-user">
-      <input name="username" placeholder="Username to Ban" required>
+      <input name="username" placeholder="Username to Ban" required />
       <button>Ban</button>
     </form><br>
 
     <form method="POST" action="/unban-user">
-      <input name="username" placeholder="Username to Unban" required>
+      <input name="username" placeholder="Username to Unban" required />
       <button>Unban</button>
     </form><br>
 
     <form method="POST" action="/delete-user">
-      <input name="username" placeholder="Username to Delete" required>
+      <input name="username" placeholder="Username to Delete" required />
       <button>Delete</button>
     </form><br>
 
@@ -328,84 +308,90 @@ app.get('/', requireLogin, (req, res) => {
   `));
 });
 
-// Users page with smart search bar and styled table
+// View users with search filter
 app.get('/users', requireLogin, (req, res) => {
   db.all("SELECT * FROM users", [], (err, rows) => {
-    if (err) return res.status(500).send("DB Error");
+    if (err) return res.status(500).send("DB error");
 
     let html = `
       <h2>Users</h2>
       <input type="text" id="searchInput" placeholder="Search users by username, status, note..." autocomplete="off" />
-
       <div class="users-table-container table-wrapper">
       <table border="1" id="usersTable">
         <thead>
           <tr>
             <th>Username</th><th>Status</th><th>HWID</th><th>IP</th><th>Note</th><th>Locked HWID</th><th>Actions</th>
           </tr>
-        </thead><tbody>
+        </thead>
+        <tbody>
     `;
+
     rows.forEach(u => {
       html += `<tr>
-        <td>${escape(u.username)}</td>
-        <td>${escape(u.status)}</td>
-        <td>${escape(u.hwid || 'N/A')}</td>
-        <td>${escape(u.ip || 'N/A')}</td>
-        <td>${escape(u.note || '')}</td>
-        <td>${escape(u.locked_hwid || 'None')}</td>
+        <td>${escapeHtml(u.username)}</td>
+        <td>${escapeHtml(u.status)}</td>
+        <td>${escapeHtml(u.hwid || 'N/A')}</td>
+        <td>${escapeHtml(u.ip || 'N/A')}</td>
+        <td>${escapeHtml(u.note || '')}</td>
+        <td>${escapeHtml(u.locked_hwid || 'None')}</td>
         <td>
           <form method="POST" action="/reset-password" style="display:inline">
-            <input type="hidden" name="username" value="${u.username}">
-            <input type="password" name="newpass" placeholder="New Pass" required>
+            <input type="hidden" name="username" value="${escapeHtml(u.username)}" />
+            <input type="password" name="newpass" placeholder="New Pass" required />
             <button>Reset Password</button>
           </form>
           <form method="POST" action="/lock-account" style="display:inline">
-            <input type="hidden" name="username" value="${u.username}">
+            <input type="hidden" name="username" value="${escapeHtml(u.username)}" />
             <button>Lock Account</button>
           </form>
         </td>
       </tr>`;
     });
+
     html += `</tbody></table></div><br><a href="/">Back</a>`;
 
-    // Add JS script for search filter
     const script = `
 <script>
   const searchInput = document.getElementById('searchInput');
-  const table = document.getElementById('usersTable').getElementsByTagName('tbody')[0];
+  const tbody = document.getElementById('usersTable').getElementsByTagName('tbody')[0];
 
   searchInput.addEventListener('input', () => {
     const filter = searchInput.value.toLowerCase();
-    for (let row of table.rows) {
+    for (let row of tbody.rows) {
       const text = row.innerText.toLowerCase();
       row.style.display = text.includes(filter) ? '' : 'none';
     }
   });
-</script>
-`;
+</script>`;
 
     res.send(renderPage("Users", html, script));
   });
 });
 
-// Admin actions (create, ban, unban, delete, reset pass, lock account)
+// Admin actions
+
 app.post('/create-user', requireLogin, async (req, res) => {
   const { username, password, note = '' } = req.body;
   if (!username || !password) return res.send("Missing fields.");
-  const hash = await bcrypt.hash(password, SALT_ROUNDS);
-  db.run(`
-    INSERT INTO users (username, password, note)
-    VALUES (?, ?, ?)
-    ON CONFLICT(username) DO UPDATE SET password=excluded.password, note=excluded.note
-  `, [username, hash, note], err => {
-    if (err) return res.send("DB error.");
-    res.redirect('/');
-  });
+
+  try {
+    const hash = await bcrypt.hash(password, SALT_ROUNDS);
+    db.run(`
+      INSERT INTO users (username, password, note)
+      VALUES (?, ?, ?)
+      ON CONFLICT(username) DO UPDATE SET password=excluded.password, note=excluded.note
+    `, [username, hash, note], (err) => {
+      if (err) return res.send("DB error.");
+      res.redirect('/');
+    });
+  } catch {
+    res.send("Server error.");
+  }
 });
 
 app.post('/ban-user', requireLogin, (req, res) => {
   const { username } = req.body;
-  db.run("UPDATE users SET status='banned' WHERE username=?", [username], err => {
+  db.run("UPDATE users SET status='banned' WHERE username=?", [username], (err) => {
     if (!err) logEvent(`User ${username} was banned.`);
     res.redirect('/');
   });
@@ -413,164 +399,166 @@ app.post('/ban-user', requireLogin, (req, res) => {
 
 app.post('/unban-user', requireLogin, (req, res) => {
   const { username } = req.body;
-  db.run("UPDATE users SET status='active' WHERE username=?", [username], err => res.redirect('/'));
+  db.run("UPDATE users SET status='active' WHERE username=?", [username], () => res.redirect('/'));
 });
 
 app.post('/delete-user', requireLogin, (req, res) => {
   const { username } = req.body;
-  db.run("DELETE FROM users WHERE username=?", [username], err => res.redirect('/'));
+  db.run("DELETE FROM users WHERE username=?", [username], () => res.redirect('/'));
 });
 
 app.post('/reset-password', requireLogin, async (req, res) => {
   const { username, newpass } = req.body;
   if (!newpass) return res.send("Missing new password.");
-  const hash = await bcrypt.hash(newpass, SALT_ROUNDS);
-  db.run("UPDATE users SET password=? WHERE username=?", [hash, username], err => res.redirect('/users'));
+
+  try {
+    const hash = await bcrypt.hash(newpass, SALT_ROUNDS);
+    db.run("UPDATE users SET password=? WHERE username=?", [hash, username], () => res.redirect('/users'));
+  } catch {
+    res.send("Server error.");
+  }
 });
 
 app.post('/lock-account', requireLogin, (req, res) => {
   const { username } = req.body;
   db.get("SELECT hwid FROM users WHERE username=?", [username], (err, row) => {
     if (err || !row || !row.hwid) return res.send("Cannot lock account: No HWID found.");
-    db.run("UPDATE users SET locked_hwid=? WHERE username=?", [row.hwid, username], err2 => {
+
+    db.run("UPDATE users SET locked_hwid=? WHERE username=?", [row.hwid, username], (err2) => {
       if (!err2) logEvent(`Account ${username} locked to HWID ${row.hwid}`);
       res.redirect('/users');
     });
   });
 });
 
-// Notifications page with polling and notification sound
+// Notifications with live polling and clear logs
 app.get('/notifications', requireLogin, (req, res) => {
   fs.readFile(LOG_FILE, 'utf8', (err, data) => {
-    const logContent = err ? "No logs yet." : escape(data);
+    const logs = err ? "No logs yet." : escapeHtml(data);
 
     const html = `
       <h2>Notifications Log</h2>
-      <pre id="logContent">${logContent}</pre>
+      <pre id="logContent">${logs}</pre>
       <form method="POST" action="/clear-logs" style="text-align:center; margin-top: 1em;">
-        <button type="submit" onclick="return confirm('Are you sure you want to clear all logs?');">Clear Logs</button>
+        <button type="submit">Clear Logs</button>
       </form>
-      <br><a href="/">Back</a>
-
-      <audio id="notifSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
+      <button id="toggleSoundBtn" style="margin-top:1em; background:#ff1a1a; color:#000; border:none; padding:10px; border-radius:8px; cursor:pointer;">Enable Sound</button>
     `;
 
-    // JS polls logs.txt every 10 seconds and plays sound if new logs detected
     const script = `
 <script>
-  const logEl = document.getElementById('logContent');
-  const notifSound = document.getElementById('notifSound');
-  let lastLogLength = logEl.innerText.length;
+  const logContent = document.getElementById('logContent');
+  const toggleSoundBtn = document.getElementById('toggleSoundBtn');
+  let soundEnabled = false;
+  let lastLength = logContent.textContent.length;
+  const beep = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+
+  toggleSoundBtn.onclick = () => {
+    soundEnabled = !soundEnabled;
+    toggleSoundBtn.textContent = soundEnabled ? 'Disable Sound' : 'Enable Sound';
+  };
 
   async function pollLogs() {
     try {
-      const res = await fetch('/logs-data');
-      if (!res.ok) throw new Error('Fetch failed');
+      const res = await fetch('/api/logs');
       const text = await res.text();
-      if (text.length > lastLogLength) {
-        notifSound.play();
-        logEl.innerText = text;
-        lastLogLength = text.length;
-      }
-    } catch (e) {
-      console.error('Error fetching logs:', e);
-    }
+      if (text.length > lastLength && soundEnabled) beep.play();
+      lastLength = text.length;
+      logContent.textContent = text;
+      logContent.scrollTop = logContent.scrollHeight;
+    } catch {}
+    setTimeout(pollLogs, 2000);
   }
-  setInterval(pollLogs, 10000);
-</script>
-`;
+
+  pollLogs();
+</script>`;
+
     res.send(renderPage("Notifications", html, script));
   });
 });
 
 app.post('/clear-logs', requireLogin, (req, res) => {
-  fs.writeFile(LOG_FILE, '', err => {
-    if (!err) logEvent('Logs cleared by admin.');
+  fs.writeFile(LOG_FILE, '', (err) => {
+    if (err) return res.send("Error clearing logs.");
     res.redirect('/notifications');
   });
 });
 
-// Endpoint to serve logs data for polling
-app.get('/logs-data', requireLogin, (req, res) => {
+// API route to fetch logs for polling
+app.get('/api/logs', requireLogin, (req, res) => {
   fs.readFile(LOG_FILE, 'utf8', (err, data) => {
-    if (err) return res.send('');
-    res.set('Content-Type', 'text/plain');
-    res.send(data);
+    res.type('text/plain').send(err ? "No logs." : data);
   });
 });
 
-// === API ===
+// === API Routes ===
 
 // Register API
-app.post('/register', async (req, res) => {
+app.post('/api/register', async (req, res) => {
   const { username, password, hwid } = req.body;
-  const ip = req.ip;
-  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
+  if (!username || !password || !hwid) return res.json({ status: 'error', message: 'Missing fields.' });
 
-  // Check if either the username or the hwid is banned (to prevent bypass)
-  db.get("SELECT * FROM users WHERE username=? OR locked_hwid=?", [username, hwid], async (err, row) => {
-    if (row && row.status === 'banned') {
-      logEvent(`Banned user or HWID attempted registration: ${username}, HWID: ${hwid}`);
-      return res.status(403).json({ status: "error", message: "Banned." });
-    }
-    if (row && row.locked_hwid && row.locked_hwid !== hwid) {
-      logEvent(`HWID mismatch registration attempt for locked account: ${username}`);
-      return res.status(403).json({ status: "error", message: "HWID locked." });
-    }
+  db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
+    if (err) return res.json({ status: 'error', message: 'DB error.' });
+    if (row) return res.json({ status: 'error', message: 'User already exists.' });
 
-    const hash = await bcrypt.hash(password, SALT_ROUNDS);
-    db.run(`
-      INSERT INTO users (username, password, hwid, ip, status)
-      VALUES (?, ?, ?, ?, 'active')
-      ON CONFLICT(username) DO UPDATE SET password=excluded.password, hwid=excluded.hwid, ip=excluded.ip
-    `, [username, hash, hwid, ip], err2 => {
-      if (err2) return res.status(500).json({ status: "error", message: "DB error." });
-      logEvent(`User registered: ${username} (HWID: ${hwid}, IP: ${ip})`);
-      res.json({ status: "ok", message: "Registered." });
-    });
+    try {
+      const hash = await bcrypt.hash(password, SALT_ROUNDS);
+      const ip = req.ip.replace(/^::ffff:/, '');
+
+      db.run("INSERT INTO users (username, password, hwid, ip) VALUES (?, ?, ?, ?)", [username, hash, hwid, ip], (err2) => {
+        if (err2) return res.json({ status: 'error', message: 'DB error inserting.' });
+        logEvent(`New user registered: ${username} from IP ${ip} with HWID ${hwid}`);
+        res.json({ status: 'success', message: 'Registered.' });
+      });
+    } catch {
+      res.json({ status: 'error', message: 'Server error.' });
+    }
   });
 });
 
 // Login API
-app.post('/login-user', (req, res) => {
+app.post('/api/login', (req, res) => {
   const { username, password, hwid } = req.body;
-  const ip = req.ip;
-  if (!username || !password || !hwid) return res.status(400).json({ status: "error", message: "Missing fields." });
+  if (!username || !password || !hwid) return res.json({ status: 'error', message: 'Missing fields.' });
 
-  db.get("SELECT * FROM users WHERE username=?", [username], async (err, row) => {
-    if (!row) return res.status(401).json({ status: "error", message: "Invalid credentials." });
-    if (row.status === 'banned') {
-      logEvent(`Banned user login attempt: ${username}`);
-      return res.status(403).json({ status: "error", message: "Banned." });
-    }
-    if (row.locked_hwid && row.locked_hwid !== hwid) {
-      logEvent(`HWID mismatch login attempt: ${username}`);
-      return res.status(403).json({ status: "error", message: "HWID locked." });
-    }
+  db.get("SELECT * FROM users WHERE username=?", [username], async (err, user) => {
+    if (err) return res.json({ status: 'error', message: 'DB error.' });
+    if (!user) return res.json({ status: 'error', message: 'Invalid username or password.' });
+    if (user.status === 'banned') return res.json({ status: 'error', message: 'User banned.' });
 
-    const valid = await bcrypt.compare(password, row.password);
-    if (!valid) return res.status(401).json({ status: "error", message: "Invalid credentials." });
+    try {
+      const passMatch = await bcrypt.compare(password, user.password);
+      if (!passMatch) return res.json({ status: 'error', message: 'Invalid username or password.' });
 
-    // Track HWIDs: allow max 2 HWIDs per user, ban if exceeded
-    const existingHwids = row.hwid ? row.hwid.split(',') : [];
-    if (!existingHwids.includes(hwid)) {
-      existingHwids.push(hwid);
-      if (existingHwids.length > 2) {
-        db.run("UPDATE users SET status='banned' WHERE username=?", [username], () => {
-          logEvent(`User ${username} banned for HWID abuse.`);
-        });
-        return res.status(403).json({ status: "error", message: "HWID abuse detected, banned." });
+      const ip = req.ip.replace(/^::ffff:/, '');
+
+      // HWID checks
+      if (user.locked_hwid && user.locked_hwid !== hwid) {
+        return res.json({ status: 'error', message: 'Account locked to different HWID.' });
       }
-      db.run("UPDATE users SET hwid=? WHERE username=?", [existingHwids.join(','), username]);
-    }
 
-    db.run("UPDATE users SET ip=? WHERE username=?", [ip, username]);
-    logEvent(`User logged in: ${username} (HWID: ${hwid}, IP: ${ip})`);
-    res.json({ status: "ok", message: "Logged in." });
+      // Track HWID changes (allow max 2 HWIDs)
+      let hwids = (user.hwid || '').split(',');
+      if (!hwids.includes(hwid)) {
+        hwids.push(hwid);
+      }
+      if (hwids.length > 2) {
+        db.run("UPDATE users SET status='banned' WHERE username=?", [username]);
+        logEvent(`User ${username} auto-banned for exceeding HWID limit.`);
+        return res.json({ status: 'error', message: 'User banned for HWID abuse.' });
+      }
+
+      db.run("UPDATE users SET hwid=?, ip=? WHERE username=?", [hwids.join(','), ip, username]);
+      logEvent(`User ${username} logged in from IP ${ip} with HWID ${hwid}`);
+
+      res.json({ status: 'success', message: 'Logged in.' });
+    } catch {
+      res.json({ status: 'error', message: 'Server error.' });
+    }
   });
 });
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}`);
+  console.log(`Server listening at http://0.0.0.0:${PORT}`);
 });
