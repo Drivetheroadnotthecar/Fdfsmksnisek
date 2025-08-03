@@ -1,0 +1,124 @@
+document.body.style.margin = "0";
+document.body.style.backgroundColor = "#0a0a0a";
+document.body.style.fontFamily = "Arial, sans-serif";
+document.body.style.color = "#e31b1b";
+
+// HEADER
+const header = document.createElement("header");
+header.style.background = "#1a1a1a";
+header.style.padding = "20px";
+header.style.textAlign = "center";
+header.style.borderBottom = "2px solid #e31b1b";
+
+const title = document.createElement("h1");
+title.textContent = "Soulsgames - Mod & Cheat Shop";
+title.style.margin = "0";
+header.appendChild(title);
+document.body.appendChild(header);
+
+// NAV
+const nav = document.createElement("nav");
+nav.style.textAlign = "center";
+nav.style.marginTop = "10px";
+
+["Home", "Mods", "Cheats", "Contact"].forEach(text => {
+  const link = document.createElement("a");
+  link.href = "#";
+  link.textContent = text;
+  link.style.color = "#e31b1b";
+  link.style.margin = "0 15px";
+  link.style.textDecoration = "none";
+  link.style.fontWeight = "bold";
+  link.onmouseover = () => (link.style.color = "#ffffff");
+  link.onmouseout = () => (link.style.color = "#e31b1b");
+  nav.appendChild(link);
+});
+document.body.appendChild(nav);
+
+// HERO
+const hero = document.createElement("section");
+hero.style.textAlign = "center";
+hero.style.padding = "60px 20px";
+
+const heroTitle = document.createElement("h2");
+heroTitle.textContent = "Premium Cheats & Mods";
+heroTitle.style.fontSize = "36px";
+heroTitle.style.marginBottom = "10px";
+hero.appendChild(heroTitle);
+
+const heroSub = document.createElement("p");
+heroSub.textContent = "Secure. Fast. Undetected.";
+heroSub.style.color = "#ccc";
+hero.appendChild(heroSub);
+
+document.body.appendChild(hero);
+
+// PRODUCTS
+const section = document.createElement("section");
+section.style.padding = "40px 20px";
+
+const sectionTitle = document.createElement("h2");
+sectionTitle.textContent = "Popular Products";
+sectionTitle.style.borderBottom = "1px solid #e31b1b";
+sectionTitle.style.paddingBottom = "10px";
+sectionTitle.style.marginBottom = "30px";
+section.appendChild(sectionTitle);
+
+const productGrid = document.createElement("div");
+productGrid.style.display = "grid";
+productGrid.style.gridTemplateColumns = "repeat(auto-fit, minmax(250px, 1fr))";
+productGrid.style.gap = "20px";
+
+const products = [
+  { name: "Apex Legends Mod", price: "$20" },
+  { name: "Rust ESP + Aimbot", price: "$30" },
+  { name: "GTA V Mod Menu", price: "$15" },
+  { name: "CS2 Internal Cheat", price: "$25" }
+];
+
+products.forEach(prod => {
+  const card = document.createElement("div");
+  card.style.background = "#1a1a1a";
+  card.style.border = "1px solid #e31b1b";
+  card.style.padding = "20px";
+  card.style.borderRadius = "6px";
+  card.style.textAlign = "center";
+
+  const name = document.createElement("h3");
+  name.textContent = prod.name;
+  card.appendChild(name);
+
+  const price = document.createElement("p");
+  price.textContent = prod.price;
+  price.style.color = "#fff";
+  card.appendChild(price);
+
+  const buyBtn = document.createElement("button");
+  buyBtn.textContent = "Buy Now";
+  buyBtn.style.background = "#e31b1b";
+  buyBtn.style.color = "#fff";
+  buyBtn.style.border = "none";
+  buyBtn.style.padding = "10px 20px";
+  buyBtn.style.cursor = "pointer";
+  buyBtn.onclick = () => alert(`Purchasing: ${prod.name}`);
+  card.appendChild(buyBtn);
+
+  productGrid.appendChild(card);
+});
+
+section.appendChild(productGrid);
+document.body.appendChild(section);
+
+// FOOTER
+const footer = document.createElement("footer");
+footer.style.background = "#1a1a1a";
+footer.style.padding = "20px";
+footer.style.textAlign = "center";
+footer.style.borderTop = "2px solid #e31b1b";
+
+const copy = document.createElement("p");
+copy.textContent = "© 2025 Soulsgames. All rights reserved.";
+copy.style.color = "#777";
+footer.appendChild(copy);
+
+document.body.appendChild(footer);
